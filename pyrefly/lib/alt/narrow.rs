@@ -59,6 +59,8 @@ use crate::binding::narrow::NarrowSource;
 use crate::binding::narrow::NarrowingSubject;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
+use crate::types::callable::Param;
+use crate::types::callable::Params;
 use crate::types::class::ClassType;
 use crate::types::function::FunctionKind;
 use crate::types::lit_int::LitInt;
@@ -485,9 +487,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         func: &Expr,
         args: &Arguments,
+        keyword: Option<&Name>,
         errors: &ErrorCollector,
     ) -> Option<AtomicNarrowOp> {
         let func_ty = self.expr_infer(func, errors);
+        if let Some(keyword) = keyword {
+            // The keyword argument is narrowed only if it binds to the first parameter after any
+            // bound receiver. Like mypy, we only check the first signature of an overload.
+            let receiver = usize::from(matches!(func_ty, Type::BoundMethod(_)));
+            let (sig, _) = func_ty.toplevel_callable_signatures().next()?;
+            let (Params::List(params) | Params::Partial(params)) = &sig.params else {
+                return None;
+            };
+            if !matches!(params.items().get(receiver), Some(Param::Pos(name, ..)) if name == keyword)
+            {
+                return None;
+            }
+        }
         if args.args.len() > 1 {
             let second_arg = &args.args[1];
             let op = match func_ty.callee_kind() {
@@ -1882,8 +1898,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ty.clone()
                 }
             }
-            AtomicNarrowOp::Call(func, args) | AtomicNarrowOp::NotCall(func, args) => {
-                if let Some(resolved_op) = self.resolve_narrowing_call(func, args, errors) {
+            AtomicNarrowOp::Call(func, args, keyword)
+            | AtomicNarrowOp::NotCall(func, args, keyword) => {
+                if let Some(resolved_op) =
+                    self.resolve_narrowing_call(func, args, keyword.as_ref(), errors)
+                {
                     if matches!(op, AtomicNarrowOp::Call(..)) {
                         self.atomic_narrow(ty, &resolved_op, range, errors)
                     } else {
@@ -2192,11 +2211,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     return type_info.clone();
                 };
                 let Some(op_for_narrow) = (match op {
-                    AtomicNarrowOp::Call(func, args) => {
-                        self.resolve_narrowing_call(func.as_ref(), args, errors)
+                    AtomicNarrowOp::Call(func, args, keyword) => {
+                        self.resolve_narrowing_call(func.as_ref(), args, keyword.as_ref(), errors)
                     }
-                    AtomicNarrowOp::NotCall(func, args) => self
-                        .resolve_narrowing_call(func.as_ref(), args, errors)
+                    AtomicNarrowOp::NotCall(func, args, keyword) => self
+                        .resolve_narrowing_call(func.as_ref(), args, keyword.as_ref(), errors)
                         .map(|resolved_op| resolved_op.negate()),
                     _ => Some(op.clone()),
                 }) else {
