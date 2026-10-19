@@ -1818,6 +1818,31 @@ def f(c: C, x: int | str):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5263
+testcase!(
+    bug = "An argument passed by keyword to a TypeGuard/TypeIs function is not narrowed",
+    test_typeguard_keyword_argument,
+    r#"
+from typing import TypeGuard, TypeIs, assert_type
+def is_int_guard(x: object) -> TypeGuard[int]: ...
+def is_int(x: object, y: object = None) -> TypeIs[int]: ...
+class C:
+    def is_int(self, x: object) -> TypeIs[int]: ...
+def f(a: int | str, b: int | str, c: C):
+    if is_int_guard(x=a):
+        assert_type(a, int)  # E: assert_type(int | str, int) failed
+    if is_int(x=a):
+        assert_type(a, int)  # E: assert_type(int | str, int) failed
+    else:
+        assert_type(a, str)  # E: assert_type(int | str, str) failed
+    if is_int(y=b, x=a):
+        assert_type(a, int)  # E: assert_type(int | str, int) failed
+        assert_type(b, int | str)
+    if c.is_int(x=a):
+        assert_type(a, int)  # E: assert_type(int | str, int) failed
+    "#,
+);
+
 testcase!(
     test_typeguard_generic_function,
     r#"
